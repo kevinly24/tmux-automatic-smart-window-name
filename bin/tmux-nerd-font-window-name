@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+
+# Record start time
+START_TIME=$(date +%s.%N)
+
+# Debug mode (set to true to enable debug logging)
+DEBUG_MODE=false
+
+# Check if yq command is available
+if ! command -v yq >/dev/null 2>&1; then
+  echo "$1 ⚠︎ yq missing"
+  exit 1
+fi
+
+PANE_ID=$1
+CURRENT_WINDOW_INDEX="$(tmux display-message -p -t "${PANE_ID}" '#{window_index}')"
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_CONFIG="$CURRENT_DIR/defaults.yml"
+USER_CONFIG="$HOME/.config/tmux/tmux-nerd-font-window-name.yml"
+
+# Function to retrieve a configuration value
+get_config_value() {
+  local key="$1"
+  local value=""
+  if [ -f "$USER_CONFIG" ]; then
+    value="$(yq -r "$key" "$USER_CONFIG")"
+    if [ "$value" == "null" ]; then
+      # Fallback to default config if key is not found in user config
+      value="$(yq -r "$key" "$DEFAULT_CONFIG")"
+    fi
+  else
+    value="$(yq -r "$key" "$DEFAULT_CONFIG")"
+  fi
+  echo "$value"
+}
+
+WINDOW_DIR=""
+
+get_path_type() {
+  local path="$1"
+  if [[ "$path" == "$HOME/.config"* ]]; then
+    echo "config"
+  elif [ -d "$path/.git" ] || git -C "$path" rev-parse --is-inside-work-tree &>/dev/null; then
+    echo "git"
+  else 
+    echo "path"
+  fi
+}
+
+get_smart_path() {
+  local type="$1"
+  local path="$2"
+  
+  # Check if path is home directory
+  if [ "$path" = "$HOME" ]; then
+    echo "~"
+    return 0
+  fi
+  
+  # Return git repo name if it's a git repository
+  if [ $type = "git" ]; then
+    local repo_name="$(basename "$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)")"
+    if [ -n "$repo_name" ]; then
+      echo "$repo_name"
+      return 0
+    fi
+  fi
+  
+  # Otherwise return basename of path
+  basename "$path"
+}
+
+bruh() {
+  local index="$1"
+  local -A cmd_path_map
+  local highest_priority=-999
+  local highest_cmd=""
+  local highest_cmd_priority=0
+  local highest_cmd_icon=""
+  local highest_path=""
+  local highest_path_type=""
+  local highest_path_short=""
+  local highest_path_icon=""
+  
+  while IFS="," read -r cmd path; do
+    cmd_path_map["$cmd"]="$path"
+    
+    # Get command priority from commands section
+    local cmd_priority="$(get_config_value ".commands[\"$cmd\"].priority")"
+    if [ "$cmd_priority" == "null" ]; then
+      cmd_priority=0
+    fi
+    
+    # Check path type and add priority from paths section
+    local path_type="$(get_path_type "$path")"
+    local path_priority=0
+    if [ -n "$path_type" ]; then
+      path_priority="$(get_config_value ".paths[\"$path_type\"].priority")"
+      if [ "$path_priority" == "null" ]; then
+        path_priority=0  # Default priority if not configured
+      fi
+    fi
+    
+    local total_priority=$((cmd_priority + path_priority))
+    
+    # Update highest priority command
+    if (( total_priority > highest_priority )); then
+      highest_priority=$total_priority
+      highest_cmd_priority=$cmd_priority
+      highest_cmd=$cmd
+      highest_path=$path
+      highest_path_type=$path_type
+    fi
+  done < <(tmux list-panes -t "$index" -F "#{pane_current_command},#{pane_current_path}")
+  
+  highest_path_short="$(get_smart_path "$highest_path_type" "$highest_path")"
+
+  # Write debug info to log if debug mode is enabled
+  if [ "$DEBUG_MODE" = true ]; then
+    {
+      echo "--- Debug info for window $index: $PANE_ID ---"
+      for cmd in "${!cmd_path_map[@]}"; do
+        echo "Command: $cmd, Path: ${cmd_path_map[$cmd]}"
+      done
+      echo "Highest priority command: $highest_cmd ($highest_priority)"
+      echo "Highest priority path: $highest_path"
+      echo "Highest priority path shortened: $highest_path_short"
+      echo "-------------------------------"
+    } >> "$HOME/.config/tmux/debug.log"
+  fi
+
+
+  # Get icons for command and path type
+  highest_cmd_icon="$(get_config_value ".commands[\"$highest_cmd\"].icon")"
+  if [ "$highest_cmd_icon" == "null" ]; then
+    highest_cmd_icon="$(get_config_value ".icons[\"$highest_cmd\"]")"
+    if [ "$highest_cmd_icon" == "null" ]; then
+      highest_cmd_icon="?"
+    fi
+  fi
+  
+  highest_path_icon="$(get_config_value ".paths[\"$highest_path_type\"].icon")"
+  if [ "$highest_path_icon" == "null" ]; then
+    highest_path_icon="?"
+  fi
+
+  # Check if path should be hidden for this command
+  if [ -n "$highest_cmd" ]; then
+    local hide_path="$(get_config_value ".commands[\"$highest_cmd\"].hidePath")"
+    if [ "$hide_path" = "true" ]; then
+      echo "$highest_cmd_icon"
+    elif [ "$highest_cmd" = "zsh" ] && [ "$highest_path_type" != "path" ]; then
+      echo "$highest_path_icon"·"$highest_path_short"
+    else
+      echo "$highest_cmd_icon"·"$highest_path_short"
+    fi
+  fi
+}
+
+
+WINDOW_DIR="$(bruh "$CURRENT_WINDOW_INDEX")"
+
+# Calculate and log execution time if debug mode is enabled
+if [ "$DEBUG_MODE" = true ]; then
+  END_TIME=$(date +%s.%N)
+  EXECUTION_TIME=$(echo "$END_TIME - $START_TIME" | bc)
+  echo "Script execution time: $EXECUTION_TIME seconds" >> "$HOME/.config/tmux/debug.log"
+fi
+
+echo "$WINDOW_DIR"
