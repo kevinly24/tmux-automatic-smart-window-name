@@ -148,11 +148,11 @@ bruh() {
   if [ -n "$highest_cmd" ]; then
     local hide_path="$(get_config_value ".commands[\"$highest_cmd\"].hidePath")"
     if [ "$hide_path" = "true" ]; then
-      echo "$highest_cmd_icon"
-    elif [ "$highest_cmd" = "zsh" ] && [ "$highest_path_type" != "path" ]; then
-      echo "$highest_path_icon"·"$highest_path_short"
+      echo "$highest_cmd_icon "
+    elif [ "$highest_cmd " = "zsh" ] && [ "$highest_path_type" != "path" ]; then
+      echo "$highest_path_icon "·"$highest_path_short"
     else
-      echo "$highest_cmd_icon"·"$highest_path_short"
+      echo "$highest_cmd_icon "·"$highest_path_short"
     fi
   fi
 }
